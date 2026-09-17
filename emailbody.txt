@@ -1,0 +1,14 @@
+Hi $name,
+
+A while back you mentioned you were going to register to vote. This is just a
+friendly nudge to follow through if you haven't gotten to it yet.
+
+You can register, or double-check that you're already registered, here:
+https://vote.gov
+
+Thanks,
+$sender
+
+--
+You're receiving this because you told me you planned to register to vote.
+If you'd rather not get any more of these, just reply STOP and I'll stop.

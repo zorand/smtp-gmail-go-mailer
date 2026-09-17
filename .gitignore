@@ -1,0 +1,17 @@
+# Secrets — never commit an app password
+secret.txt
+*.secret
+secret*.txt
+
+# Personal data
+recipients.txt
+
+# Generated at runtime
+sent.log
+*.log
+
+# Built binaries
+dist/
+votereminder-smtp
+votereminder-smtp.exe
+*.exe
