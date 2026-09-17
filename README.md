@@ -120,7 +120,7 @@ and doesn't write the resume log:
 
 Three ways, none of which land in shell history or the process's environment:
 
-- `-password-file secret.txt` (recommended, cross-platform).
+- `-password-file ~/.config/votereminder/secret.txt` (recommended, cross-platform).
 - Piped on stdin: `pass show gmail-app | ./votereminder-smtp ...`
 - Interactive prompt (echo-off on macOS/Linux; echoes on Windows).
 
