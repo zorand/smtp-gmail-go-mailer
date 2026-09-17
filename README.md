@@ -12,7 +12,7 @@ spread across days without ever double-sending.
 - A **Gmail account with 2-Step Verification enabled** and a 16-character
   **app password** (Google Account → Security → 2-Step Verification → App passwords,
   or go straight to <https://myaccount.google.com/apppasswords>).
-- Create a new app password, give it a name you want for this app, and then download it and keep it secret!
+- Create a new app password, give it a name for this app, then copy the 16-character code it shows into a file (it's displayed only once) and keep it secret.
 
 ## Build
 
