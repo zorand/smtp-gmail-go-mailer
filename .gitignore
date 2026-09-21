@@ -1,7 +1,12 @@
-# Secrets — never commit an app password
+# Secrets — never commit an app password or voting seed
 secret.txt
 *.secret
 secret*.txt
+seed.txt
+*.seed
+*seed*.txt
+
+.DS_Store
 
 # Personal data
 recipients.txt
