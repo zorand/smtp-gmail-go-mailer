@@ -249,6 +249,66 @@ row; to start over, delete the file (or point `-sent-log` at a fresh path).
   (`$name`), keep the `reply STOP` opt-out line, and don't crank `-per-minute` —
   that's what keeps a warm list from being classified as spam.
 
+## Releasing a new version
+
+Binaries are published as GitHub Release assets, not committed to the repo
+(`dist/` is gitignored). Two tag namespaces keep the automated and manual paths
+from ever colliding:
+
+- **`release-1.1.0`** — a build-trigger tag. Pushing it runs
+  `.github/workflows/release.yml`, which builds and publishes release `v1.1.0`.
+- **`v1.1.0`** — a plain version tag. It does **not** trigger CI, and is what the
+  manual path uses.
+
+Either way, first make sure `main` is clean, committed, and pushed, checks pass,
+and you've picked a version with semantic versioning — bug fixes → patch
+(`v1.0.1`), features → minor (`v1.1.0`), breaking changes → major (`v2.0.0`):
+
+```sh
+go test ./... && go vet ./... && golangci-lint run
+```
+
+### Automatic (GitHub Actions) — normal path
+
+Push a `release-<version>` tag; CI does the rest:
+
+```sh
+git tag release-1.1.0
+git push origin release-1.1.0
+```
+
+The workflow runs `go vet` and `go test`, cross-compiles every target with
+`build.sh`, and publishes release **v1.1.0** with the `dist/` binaries and
+`SHA256SUMS` attached (notes auto-generated from commits since the last release).
+It creates the `v1.1.0` tag on the built commit as part of publishing. Watch it
+under the **Actions** tab; the release appears under **Releases** when it
+finishes. (The `release-1.1.0` trigger tag stays in your tag list; delete it with
+`git push origin :refs/tags/release-1.1.0` if you like a tidy list.)
+
+### Manual (local build) — when CI is unavailable
+
+Build and publish locally under the plain `v` tag. `gh release create` creates
+the `v1.1.0` tag as part of publishing, and CI ignores `v*` tags, so nothing else
+fires:
+
+```sh
+./build.sh v1.1.0        # dist/ with per-platform binaries + SHA256SUMS
+gh release create v1.1.0 dist/* \
+  --title v1.1.0 --generate-notes --target "$(git rev-parse HEAD)"
+```
+
+No `gh`? In the browser: **Releases → Draft a new release → Choose a tag**, type
+`v1.1.0` and "Create new tag on publish", set the target commit, drag the `dist/`
+files into the assets box, and publish.
+
+### Verifying and running
+
+Downloaders verify integrity with `sha256sum -c SHA256SUMS` (macOS:
+`shasum -a 256 -c SHA256SUMS`). The published binaries are unsigned, so on first
+run they trip macOS Gatekeeper and Windows SmartScreen — users can clear
+quarantine / click through, or build from source
+(`go build -o votereminder-smtp .`).
+
 ## Notes
 
 - Cross-compiled binaries are self-contained; ship the `.exe` (or platform binary)

@@ -1,0 +1,54 @@
+name: release
+
+# Fires on a build-trigger tag like `release-1.1.0`, and publishes a release
+# named `v1.1.0`. Plain `v*` tags are reserved for manual releases and do NOT
+# trigger this workflow, so the two paths never collide.
+on:
+  push:
+    tags:
+      - 'release-*'
+
+# The built-in GITHUB_TOKEN needs write access to create the release, its tag,
+# and upload assets.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}   # gh CLI auth
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod   # matches the module's Go version
+
+      - name: Derive version
+        id: v
+        run: |
+          # release-1.1.0 (or release-v1.1.0) -> v1.1.0
+          ver="${GITHUB_REF_NAME#release-}"
+          ver="${ver#v}"
+          echo "version=v${ver}" >> "$GITHUB_OUTPUT"
+
+      - name: Vet and test
+        run: |
+          go vet ./...
+          go test ./...
+
+      - name: Build release binaries
+        run: bash build.sh "${{ steps.v.outputs.version }}"
+
+      - name: Publish release with assets
+        # Creates the v-tag on this commit as part of publishing; the trigger
+        # tag (release-*) stays where it is.
+        run: >
+          gh release create "${{ steps.v.outputs.version }}"
+          dist/*
+          --title "${{ steps.v.outputs.version }}"
+          --generate-notes
+          --target "$GITHUB_SHA"
