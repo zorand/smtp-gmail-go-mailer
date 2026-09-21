@@ -42,7 +42,7 @@ override them to keep data and secrets wherever you like.
 
 | Flag → default | Purpose |
 |----------------|---------|
-| `-emailbody` → `emailbody.txt` | Message body. Supports `$name` / `$sender` (and `${name}` / `${sender}`). **Required** — the program exits if it's missing. |
+| `-emailbody` → `emailbody.txt` | Message body. Supports `$name`, `$sender`, `$votingsecret`, `$votinghash` (and `${...}` forms) — see [Template tags](#template-tags). **Required** — the program exits if it's missing. |
 | `-recipients` → `recipients.txt` | One recipient per line: `email` or `email,Name`. Blank lines and `#` comments ignored. Contains personal data — keep it out of version control. |
 | `-password-file` → *(none)* | File holding the 16-char app password on one line (spaces and trailing newline stripped). **No default** — pass it explicitly (or use stdin / the interactive prompt). |
 | `-sent-log` → `sent.log` | CSV resume log the program writes. |
@@ -78,6 +78,76 @@ icacls "$dir\secret.txt" /inheritance:r /grant:r "$($env:USERNAME):R"
 A `.gitignore` is included that excludes secrets, the recipient list (personal
 data), the resume log, and built binaries. Keep it — and never commit a password
 file even from outside the repo.
+
+## Template tags
+
+Both `-emailbody` and `-subject` are expanded per recipient. Write a tag as
+`$tag` or `${tag}` — use the braces when a tag is immediately followed by a
+letter (e.g. `${name}s`). A literal `$` that doesn't form a tag is left alone.
+
+| Tag | Expands to |
+|-----|-----------|
+| `$name` | The recipient's name, or their email address if the list gave no name. |
+| `$sender` | The `-from-name` value. |
+| `$votingsecret` | `voter=<url-encoded lowercased email>&token=<token>` — drop it after `?` in your ballot URL. |
+| `$votinghash` | Just `<token>`, for composing your own query string. |
+
+The voting tags require `-secrethashseed`; using one without it is a startup
+error. Example body:
+
+```
+Hi $name,
+
+You said you'd register to vote — here's your personal link:
+https://vote.example.com/ballot?$votingsecret
+
+Thanks,
+$sender
+```
+
+## Voting links & server-side verification
+
+The voting tags produce a per-voter authentication token so your ballot server
+can confirm a request came from a link you actually issued. The mailer holds no
+opinion about the vote itself — what the choice is, and whether re-voting is
+allowed, is entirely your server's concern. The token is:
+
+```
+token = base64url_nopad( HMAC-SHA256(seed, LP("vote") ‖ LP(lower(email))) )
+        LP(s) = <decimal byte length of s> ":" s
+```
+
+- **seed** — the `-secrethashseed` file's bytes with surrounding whitespace
+  trimmed. If the file is missing or empty, a fresh 32-byte random seed is
+  generated, base64-encoded, and written `0600`. **Regenerating invalidates every
+  previously issued link**, so back the file up and reuse it — and the *same* seed
+  must be present on the vote server.
+- **email** — lowercased; the `voter=` param is that same lowercased address,
+  URL-encoded.
+- Full 32-byte (43-char) token. The `"vote"` prefix domain-separates this seed
+  from any other use; the length prefixes make the signed bytes unambiguous.
+
+Because forwarding an email forwards the link, possession of the link is the
+credential: if a voter keeps their email private, only they can vote as
+themselves. The server authenticates by recomputing the token over the email it
+already has and constant-time comparing:
+
+```go
+func lp(w io.Writer, s string) { fmt.Fprintf(w, "%d:", len(s)); io.WriteString(w, s) }
+
+// seed = bytes of the -secrethashseed file, whitespace-trimmed.
+func validToken(seed []byte, voterEmail, gotToken string) bool {
+	email := strings.ToLower(voterEmail)
+	mac := hmac.New(sha256.New, seed)
+	lp(mac, "vote")
+	lp(mac, email)
+	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return hmac.Equal([]byte(want), []byte(gotToken)) // constant-time
+}
+```
+
+Keep the seed only where tokens are made or checked — the sender and the vote
+server. It is the root of trust for the whole scheme.
 
 ## Run
 
@@ -120,7 +190,7 @@ and doesn't write the resume log:
 
 Three ways, none of which land in shell history or the process's environment:
 
-- `-password-file ~/.config/votereminder/secret.txt` (recommended, cross-platform).
+- `-password-file secret.txt` (recommended, cross-platform).
 - Piped on stdin: `pass show gmail-app | ./votereminder-smtp ...`
 - Interactive prompt (echo-off on macOS/Linux; echoes on Windows).
 
@@ -134,6 +204,7 @@ Three ways, none of which land in shell history or the process's environment:
 | `-emailbody` | `emailbody.txt` | Message body file (`$name` / `$sender`). |
 | `-subject` | *(reminder text)* | Subject line; also supports `$name` / `$sender`. |
 | `-password-file` | | Read the app password from this file instead of prompting/stdin. |
+| `-secrethashseed` | | Secret seed file for voting-link HMAC. Required when the body/subject uses `$votingsecret`/`$votinghash`; generated (`0600`) if missing or empty. |
 | `-per-minute` | `20` | Max sends per minute. |
 | `-max` | `90` | Max sends this run (conservative for free-Gmail SMTP). |
 | `-sent-log` | `sent.log` | CSV resume log; used to skip duplicates. |

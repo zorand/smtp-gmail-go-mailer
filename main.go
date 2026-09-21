@@ -24,7 +24,11 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
+	crand "crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
@@ -36,6 +40,7 @@ import (
 	"net/mail"
 	"net/smtp"
 	"net/textproto"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -67,6 +72,7 @@ func main() {
 		fromAddr  = flag.String("from", "", "your Gmail address (required): SMTP username and envelope/From address")
 		fromName  = flag.String("from-name", "", "display name for the From header and $sender in the body")
 		passFile  = flag.String("password-file", "", "read the app password from this file instead of prompting/stdin")
+		seedFile  = flag.String("secrethashseed", "", "file holding the secret seed for voting-link HMAC; required when the template uses $votingsecret/$votinghash. Generated (0600) if missing or empty.")
 		perMinute = flag.Float64("per-minute", 20, "max sends per minute")
 		maxSends  = flag.Int("max", 90, "max sends this run; conservative for free-Gmail SMTP (contested 100/24h vs 500/24h)")
 		retries   = flag.Int("retries", 5, "retry attempts per message for transient errors")
@@ -103,6 +109,19 @@ func main() {
 	}
 	bodyText := string(bodyBytes)
 
+	// Load the voting seed only if a voting tag is actually used. Missing flag
+	// with a voting tag present is a hard error, before anything is sent.
+	var seed []byte
+	if usesVotingTag(*subject) || usesVotingTag(bodyText) {
+		if *seedFile == "" {
+			log.Fatalf("the template uses a voting tag ($votingsecret/$votinghash) but -secrethashseed was not given; pass -secrethashseed FILE")
+		}
+		seed, err = loadOrCreateSeed(*seedFile)
+		if err != nil {
+			log.Fatalf("loading voting seed: %v", err)
+		}
+	}
+
 	var m *mailer
 	if !*dryRun {
 		password, err := loadPassword(*passFile)
@@ -128,7 +147,7 @@ func main() {
 			break
 		}
 
-		raw, err := buildMessage(*fromAddr, *fromName, r, *subject, bodyText)
+		raw, err := buildMessage(*fromAddr, *fromName, r, *subject, bodyText, seed)
 		if err != nil {
 			log.Printf("skip %s: building message: %v", r.Email, err)
 			failCount++
@@ -136,7 +155,7 @@ func main() {
 		}
 
 		if *dryRun {
-			log.Printf("[dry-run] would send to %s (%s)", r.Email, r.Name)
+			log.Printf("[dry-run] to %s (%s):\n%s", r.Email, r.Name, string(raw))
 			sentCount++
 			continue
 		}
@@ -426,6 +445,38 @@ func warnIfInGitRepo(path string) {
 	}
 }
 
+// loadOrCreateSeed returns the HMAC key material for voting tokens. If the file
+// exists and is non-empty, the key is its contents with surrounding whitespace
+// trimmed (so a trailing editor newline doesn't matter) — the vote server must
+// derive the key the same way. If the file is missing or empty, a fresh 32-byte
+// random seed is generated, base64-encoded, written 0600, and used; this is
+// announced loudly because a new seed invalidates every previously issued link.
+func loadOrCreateSeed(path string) ([]byte, error) {
+	if b, err := os.ReadFile(path); err == nil {
+		if key := strings.TrimSpace(string(b)); key != "" {
+			warnIfWorldReadable(path)
+			warnIfInGitRepo(path)
+			return []byte(key), nil
+		}
+		// exists but empty -> generate below
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	raw := make([]byte, 32)
+	if _, err := crand.Read(raw); err != nil {
+		return nil, err
+	}
+	key := base64.StdEncoding.EncodeToString(raw)
+	if err := os.WriteFile(path, []byte(key+"\n"), 0o600); err != nil {
+		return nil, fmt.Errorf("writing new voting seed to %s: %w", path, err)
+	}
+	log.Printf("WARNING: generated a NEW voting seed in %s — links issued under any previous seed will NO LONGER verify. Back this file up and reuse it on every run and on your vote server.", path)
+	warnIfWorldReadable(path)
+	warnIfInGitRepo(path)
+	return []byte(key), nil
+}
+
 // promptPassword reads a line from the controlling terminal with echo disabled.
 // It uses /dev/tty (not stdin) so it works even when stdin is redirected, and
 // toggles echo via stty (portable across macOS/Linux; no external Go deps).
@@ -568,25 +619,64 @@ func appendSent(path, from, to string) error {
 
 // ---- message building ------------------------------------------------------
 
-// expand substitutes $name / ${name} and $sender / ${sender}. It uses an exact
-// replacer (not os.Expand) so a stray '$' elsewhere in the text is left alone.
-func expand(s, name, sender string) string {
+// expand substitutes the template tags. It uses an exact replacer (not
+// os.Expand) so a stray '$' elsewhere in the text is left alone.
+func expand(s, name, sender, votingSecret, votingHash string) string {
 	return strings.NewReplacer(
+		"${votingsecret}", votingSecret, "$votingsecret", votingSecret,
+		"${votinghash}", votingHash, "$votinghash", votingHash,
 		"${name}", name, "$name", name,
 		"${sender}", sender, "$sender", sender,
 	).Replace(s)
 }
 
+// usesVotingTag reports whether a subject/body references a voting tag (either
+// $tag or ${tag} form).
+func usesVotingTag(s string) bool {
+	return strings.Contains(s, "votingsecret") || strings.Contains(s, "votinghash")
+}
+
+// votingToken derives the per-voter authentication token:
+//
+//	base64url( HMAC-SHA256(seed, LP("vote") ‖ LP(lowerEmail)) )   LP(x)=len(x)":"x
+//
+// full 32 bytes, URL-safe base64 without padding. The server recomputes this
+// with the same seed and constant-time compares (hmac.Equal) to authenticate.
+func votingToken(seed []byte, lowerEmail string) string {
+	mac := hmac.New(sha256.New, seed)
+	writeLP(mac, "vote")
+	writeLP(mac, lowerEmail)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// writeLP writes a length-prefixed field: the byte length in ASCII decimal, a
+// colon, then the raw bytes. Length-prefixing makes the concatenation of fields
+// unambiguous, so no two distinct field sets can produce the same signed bytes.
+func writeLP(w io.Writer, s string) {
+	fmt.Fprintf(w, "%d:", len(s))
+	io.WriteString(w, s)
+}
+
 // buildMessage returns an RFC 5322 message. $name resolves to the recipient's
-// name, or their email address when no name was given. Body newlines are plain
-// \n; the SMTP DotWriter normalizes them to CRLF and dot-stuffs on the way out.
-func buildMessage(fromAddr, fromName string, r recipient, subjectTmpl, bodyTmpl string) ([]byte, error) {
+// name, or their email address when no name was given. When seed is non-nil,
+// $votingsecret / $votinghash resolve to a per-voter authentication link.
+// Body newlines are plain \n; the SMTP DotWriter normalizes them to CRLF and
+// dot-stuffs on the way out.
+func buildMessage(fromAddr, fromName string, r recipient, subjectTmpl, bodyTmpl string, seed []byte) ([]byte, error) {
 	name := r.Name
 	if name == "" {
 		name = r.Email
 	}
-	subject := expand(subjectTmpl, name, fromName)
-	body := expand(bodyTmpl, name, fromName)
+
+	var votingSecret, votingHash string
+	if seed != nil {
+		email := strings.ToLower(r.Email)
+		votingHash = votingToken(seed, email)
+		votingSecret = "voter=" + url.QueryEscape(email) + "&token=" + votingHash
+	}
+
+	subject := expand(subjectTmpl, name, fromName, votingSecret, votingHash)
+	body := expand(bodyTmpl, name, fromName, votingSecret, votingHash)
 
 	to := r.Email
 	if r.Name != "" {
