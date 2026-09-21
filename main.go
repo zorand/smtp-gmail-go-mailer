@@ -65,26 +65,16 @@ type recipient struct {
 
 func main() {
 	var (
-		recipPath = flag.String(
-			"recipients",
-			"recipients.txt",
-			"recipient list: one per line, `email` or `email,Name`; # comments and blanks ignored",
-		)
+		recipPath = flag.String("recipients", "recipients.txt", "recipient list: one per line, `email` or `email,Name`; # comments and blanks ignored")
 		sentPath  = flag.String("sent-log", "sent.log", "CSV resume log (from,to,timestamp) of sends already made; used to skip duplicates")
 		emailBody = flag.String("emailbody", "emailbody.txt", "path to the email body file; supports $name and $sender placeholders")
-		subject   = flag.String(
-			"subject",
-			"Reminder: you were going to register to vote",
-			"subject line; supports $name and $sender placeholders",
-		)
-		fromAddr = flag.String("from", "", "your Gmail address (required): SMTP username and envelope/From address")
-		fromName = flag.String("from-name", "", "display name for the From header and $sender in the body")
-		passFile = flag.String("password-file", "", "read the app password from this file instead of prompting/stdin")
-		seedFile = flag.String(
-			"secrethashseed",
-			"",
-			"file holding the secret seed for voting-link HMAC; required when the template uses $votingsecret/$votinghash. Generated (0600) if missing or empty.",
-		)
+		subject   = flag.String("subject", "Reminder: you were going to register to vote", "subject line; supports $name and $sender placeholders")
+		fromAddr  = flag.String("from", "", "your Gmail address (required): SMTP username and envelope/From address")
+		fromName  = flag.String("from-name", "", "display name for the From header and $sender in the body")
+		passFile  = flag.String("password-file", "", "read the app password from this file instead of prompting/stdin")
+		seedFile  = flag.String("secrethashseed", "",
+			"file holding the secret seed for voting-link HMAC; required when the "+
+				"template uses $votingsecret/$votinghash. Generated (0600) if missing or empty.")
 		perMinute = flag.Float64("per-minute", 20, "max sends per minute")
 		maxSends  = flag.Int("max", 90, "max sends this run; conservative for free-Gmail SMTP (contested 100/24h vs 500/24h)")
 		retries   = flag.Int("retries", 5, "retry attempts per message for transient errors")
@@ -126,9 +116,7 @@ func main() {
 	var seed []byte
 	if usesVotingTag(*subject) || usesVotingTag(bodyText) {
 		if *seedFile == "" {
-			log.Fatalf(
-				"the template uses a voting tag ($votingsecret/$votinghash) but -secrethashseed was not given; pass -secrethashseed FILE",
-			)
+			log.Fatalf("the template uses a voting tag ($votingsecret/$votinghash) but -secrethashseed was not given; pass -secrethashseed FILE")
 		}
 		seed, err = loadOrCreateSeed(*seedFile)
 		if err != nil {
@@ -192,13 +180,7 @@ func main() {
 		switch {
 		case err == nil:
 			if aerr := appendSent(*sentPath, *fromAddr, r.Email); aerr != nil {
-				log.Fatalf(
-					"sent to %s but FAILED to record it in %s: %v -- stopping to avoid duplicate sends. Add %s to the log manually before re-running.",
-					r.Email,
-					*sentPath,
-					aerr,
-					r.Email,
-				)
+				log.Fatalf("sent to %s but FAILED to record it in %s: %v -- stopping to avoid duplicate sends. Add %s to the log manually before re-running.", r.Email, *sentPath, aerr, r.Email)
 			}
 			sentCount++
 			consecFails = 0
@@ -206,9 +188,9 @@ func main() {
 
 		case errors.Is(err, errStop):
 			log.Printf("stopping at %s: %v", r.Email, err)
-			log.Printf(
-				"If this was a quota block, wait ~24h and re-run; it resumes from the sent log. If auth (535), check the app password and that 2-Step Verification is on.",
-			)
+			log.Printf("If this was a quota block, wait ~24h and re-run; it resumes " +
+				"from the sent log. If auth (535), check the app password and that " +
+				"2-Step Verification is on.")
 			printSummary(sentCount, skipCount, failCount)
 			return
 
@@ -459,11 +441,7 @@ func warnIfInGitRepo(path string) {
 	}
 	for dir := filepath.Dir(abs); ; {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			log.Printf(
-				"warning: %s is inside a git repository (%s); move the app password outside your repo so it can't be committed",
-				path,
-				dir,
-			)
+			log.Printf("warning: %s is inside a git repository (%s); move the app password outside your repo so it can't be committed", path, dir)
 			return
 		}
 		parent := filepath.Dir(dir)
@@ -500,10 +478,9 @@ func loadOrCreateSeed(path string) ([]byte, error) {
 	if err := os.WriteFile(path, []byte(key+"\n"), 0o600); err != nil {
 		return nil, fmt.Errorf("writing new voting seed to %s: %w", path, err)
 	}
-	log.Printf(
-		"WARNING: generated a NEW voting seed in %s — links issued under any previous seed will NO LONGER verify. Back this file up and reuse it on every run and on your vote server.",
-		path,
-	)
+	log.Printf("WARNING: generated a NEW voting seed in %s — links issued under any "+
+		"previous seed will NO LONGER verify. Back this file up and reuse it on "+
+		"every run and on your vote server.", path)
 	warnIfWorldReadable(path)
 	warnIfInGitRepo(path)
 	return []byte(key), nil
