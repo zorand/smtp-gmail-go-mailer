@@ -260,11 +260,13 @@ from ever colliding:
 - **`v1.1.0`** — a plain version tag. It does **not** trigger CI, and is what the
   manual path uses.
 
-Either way, first make sure `main` is clean, committed, and pushed, checks pass,
-and you've picked a version with semantic versioning — bug fixes → patch
-(`v1.0.1`), features → minor (`v1.1.0`), breaking changes → major (`v2.0.0`):
+Either way, first switch to an up-to-date `main` so the release is cut from the
+right commit, confirm it's clean, and pick a version with semantic versioning —
+bug fixes → patch (`v1.0.1`), features → minor (`v1.1.0`), breaking changes →
+major (`v2.0.0`):
 
 ```sh
+git checkout main && git pull
 go test ./... && go vet ./... && golangci-lint run
 ```
 
@@ -273,6 +275,8 @@ go test ./... && go vet ./... && golangci-lint run
 Push a `release-<version>` tag; CI does the rest:
 
 ```sh
+git checkout main && git pull
+go test ./... && go vet ./... && golangci-lint run
 git tag release-1.1.0
 git push origin release-1.1.0
 ```
@@ -292,6 +296,8 @@ the `v1.1.0` tag as part of publishing, and CI ignores `v*` tags, so nothing els
 fires:
 
 ```sh
+git checkout main && git pull
+go test ./... && go vet ./... && golangci-lint run
 ./build.sh v1.1.0        # dist/ with per-platform binaries + SHA256SUMS
 gh release create v1.1.0 dist/* \
   --title v1.1.0 --generate-notes --target "$(git rev-parse HEAD)"
