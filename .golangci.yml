@@ -1,0 +1,8 @@
+version: "2"
+linters:
+  enable:
+    - lll
+  settings:
+    lll:
+      line-length: 140   # default is 120
+      tab-width: 1        # a tab counts as N columns; default 1

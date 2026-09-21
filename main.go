@@ -65,14 +65,26 @@ type recipient struct {
 
 func main() {
 	var (
-		recipPath = flag.String("recipients", "recipients.txt", "recipient list: one per line, `email` or `email,Name`; # comments and blanks ignored")
+		recipPath = flag.String(
+			"recipients",
+			"recipients.txt",
+			"recipient list: one per line, `email` or `email,Name`; # comments and blanks ignored",
+		)
 		sentPath  = flag.String("sent-log", "sent.log", "CSV resume log (from,to,timestamp) of sends already made; used to skip duplicates")
 		emailBody = flag.String("emailbody", "emailbody.txt", "path to the email body file; supports $name and $sender placeholders")
-		subject   = flag.String("subject", "Reminder: you were going to register to vote", "subject line; supports $name and $sender placeholders")
-		fromAddr  = flag.String("from", "", "your Gmail address (required): SMTP username and envelope/From address")
-		fromName  = flag.String("from-name", "", "display name for the From header and $sender in the body")
-		passFile  = flag.String("password-file", "", "read the app password from this file instead of prompting/stdin")
-		seedFile  = flag.String("secrethashseed", "", "file holding the secret seed for voting-link HMAC; required when the template uses $votingsecret/$votinghash. Generated (0600) if missing or empty.")
+		subject   = flag.String(
+			"subject",
+			"Reminder: you were going to register to vote",
+			"subject line; supports $name and $sender placeholders",
+		)
+		fromAddr = flag.String("from", "", "your Gmail address (required): SMTP username and envelope/From address")
+		fromName = flag.String("from-name", "", "display name for the From header and $sender in the body")
+		passFile = flag.String("password-file", "", "read the app password from this file instead of prompting/stdin")
+		seedFile = flag.String(
+			"secrethashseed",
+			"",
+			"file holding the secret seed for voting-link HMAC; required when the template uses $votingsecret/$votinghash. Generated (0600) if missing or empty.",
+		)
 		perMinute = flag.Float64("per-minute", 20, "max sends per minute")
 		maxSends  = flag.Int("max", 90, "max sends this run; conservative for free-Gmail SMTP (contested 100/24h vs 500/24h)")
 		retries   = flag.Int("retries", 5, "retry attempts per message for transient errors")
@@ -114,7 +126,9 @@ func main() {
 	var seed []byte
 	if usesVotingTag(*subject) || usesVotingTag(bodyText) {
 		if *seedFile == "" {
-			log.Fatalf("the template uses a voting tag ($votingsecret/$votinghash) but -secrethashseed was not given; pass -secrethashseed FILE")
+			log.Fatalf(
+				"the template uses a voting tag ($votingsecret/$votinghash) but -secrethashseed was not given; pass -secrethashseed FILE",
+			)
 		}
 		seed, err = loadOrCreateSeed(*seedFile)
 		if err != nil {
@@ -178,7 +192,13 @@ func main() {
 		switch {
 		case err == nil:
 			if aerr := appendSent(*sentPath, *fromAddr, r.Email); aerr != nil {
-				log.Fatalf("sent to %s but FAILED to record it in %s: %v -- stopping to avoid duplicate sends. Add %s to the log manually before re-running.", r.Email, *sentPath, aerr, r.Email)
+				log.Fatalf(
+					"sent to %s but FAILED to record it in %s: %v -- stopping to avoid duplicate sends. Add %s to the log manually before re-running.",
+					r.Email,
+					*sentPath,
+					aerr,
+					r.Email,
+				)
 			}
 			sentCount++
 			consecFails = 0
@@ -186,7 +206,9 @@ func main() {
 
 		case errors.Is(err, errStop):
 			log.Printf("stopping at %s: %v", r.Email, err)
-			log.Printf("If this was a quota block, wait ~24h and re-run; it resumes from the sent log. If auth (535), check the app password and that 2-Step Verification is on.")
+			log.Printf(
+				"If this was a quota block, wait ~24h and re-run; it resumes from the sent log. If auth (535), check the app password and that 2-Step Verification is on.",
+			)
 			printSummary(sentCount, skipCount, failCount)
 			return
 
@@ -194,10 +216,13 @@ func main() {
 			failCount++
 			consecFails++
 			log.Printf("failed to send to %s: %v", r.Email, err)
-			if consecFails >= 5 {
-				log.Printf("5 consecutive failures; stopping in case something is wrong (network or a wider block).")
-				break
-			}
+		}
+
+		// Stop the run when sends fail back-to-back (network down, a wider
+		// block) instead of churning through the rest of the list.
+		if consecFails >= 5 {
+			log.Printf("5 consecutive failures; stopping in case something is wrong (network or a wider block).")
+			break
 		}
 	}
 
@@ -236,23 +261,23 @@ func (m *mailer) connect() error {
 	}
 	c, err := smtp.NewClient(conn, smtpHost)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return err
 	}
 	if err := c.Hello(m.heloName); err != nil {
-		c.Close()
+		_ = c.Close()
 		return err
 	}
 	if ok, _ := c.Extension("STARTTLS"); !ok {
-		c.Close()
+		_ = c.Close()
 		return errors.New("server does not advertise STARTTLS")
 	}
 	if err := c.StartTLS(&tls.Config{ServerName: smtpHost}); err != nil {
-		c.Close()
+		_ = c.Close()
 		return err
 	}
 	if err := c.Auth(m.auth); err != nil {
-		c.Close()
+		_ = c.Close()
 		return err // typically 535 on a bad app password
 	}
 	m.client = c
@@ -301,7 +326,7 @@ func (m *mailer) transact(from, to string, raw []byte) error {
 		return err
 	}
 	if _, err := w.Write(raw); err != nil {
-		w.Close()
+		_ = w.Close()
 		return err
 	}
 	return w.Close() // writes the "." terminator; server's final reply lands here
@@ -434,7 +459,11 @@ func warnIfInGitRepo(path string) {
 	}
 	for dir := filepath.Dir(abs); ; {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			log.Printf("warning: %s is inside a git repository (%s); move the app password outside your repo so it can't be committed", path, dir)
+			log.Printf(
+				"warning: %s is inside a git repository (%s); move the app password outside your repo so it can't be committed",
+				path,
+				dir,
+			)
 			return
 		}
 		parent := filepath.Dir(dir)
@@ -471,7 +500,10 @@ func loadOrCreateSeed(path string) ([]byte, error) {
 	if err := os.WriteFile(path, []byte(key+"\n"), 0o600); err != nil {
 		return nil, fmt.Errorf("writing new voting seed to %s: %w", path, err)
 	}
-	log.Printf("WARNING: generated a NEW voting seed in %s — links issued under any previous seed will NO LONGER verify. Back this file up and reuse it on every run and on your vote server.", path)
+	log.Printf(
+		"WARNING: generated a NEW voting seed in %s — links issued under any previous seed will NO LONGER verify. Back this file up and reuse it on every run and on your vote server.",
+		path,
+	)
 	warnIfWorldReadable(path)
 	warnIfInGitRepo(path)
 	return []byte(key), nil
@@ -485,7 +517,7 @@ func promptPassword() (string, error) {
 	if err != nil {
 		return readLine(os.Stdin) // no controlling tty; fall back (will echo)
 	}
-	defer tty.Close()
+	defer func() { _ = tty.Close() }()
 
 	fmt.Fprint(os.Stderr, "Gmail app password: ")
 	restore := setEcho(tty, false)
@@ -601,12 +633,18 @@ func loadSent(path string) (map[string]bool, error) {
 // appendSent records one send as a CSV row: from,to,timestamp
 // (timestamp is local time, YYYYMMDD-HHMMSS). A header is written when the file
 // is first created.
-func appendSent(path, from, to string) error {
+func appendSent(path, from, to string) (err error) {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() {
+		// Surface a Close error (e.g. a failed flush) only if the writes
+		// themselves succeeded — a dropped record here risks a duplicate send.
+		if cerr := f.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 	if fi, err := f.Stat(); err == nil && fi.Size() == 0 {
 		if _, err := fmt.Fprintln(f, "from,to,timestamp"); err != nil {
 			return err
@@ -653,8 +691,9 @@ func votingToken(seed []byte, lowerEmail string) string {
 // colon, then the raw bytes. Length-prefixing makes the concatenation of fields
 // unambiguous, so no two distinct field sets can produce the same signed bytes.
 func writeLP(w io.Writer, s string) {
-	fmt.Fprintf(w, "%d:", len(s))
-	io.WriteString(w, s)
+	// w is always an hmac.Hash here, whose Write is documented never to error.
+	_, _ = fmt.Fprintf(w, "%d:", len(s))
+	_, _ = io.WriteString(w, s)
 }
 
 // buildMessage returns an RFC 5322 message. $name resolves to the recipient's
