@@ -58,6 +58,10 @@ const (
 // would only extend a block or waste attempts.
 var errStop = errors.New("stop run")
 
+// errRecipientRejected marks a per-recipient failure (a rejected RCPT TO, e.g. a
+// bad address) that should skip only that recipient rather than stop the run.
+var errRecipientRejected = errors.New("recipient rejected")
+
 type recipient struct {
 	Email string
 	Name  string
@@ -65,14 +69,22 @@ type recipient struct {
 
 func main() {
 	var (
-		recipPath = flag.String("recipients", "recipients.txt", "recipient list: one per line, `email` or `email,Name`; # comments and blanks ignored")
+		recipPath = flag.String(
+			"recipients",
+			"recipients.txt",
+			"recipient list: one per line, `email` or `email,Name`; # comments and blanks ignored",
+		)
 		sentPath  = flag.String("sent-log", "sent.log", "CSV resume log (from,to,timestamp) of sends already made; used to skip duplicates")
 		emailBody = flag.String("emailbody", "emailbody.txt", "path to the email body file; supports $name and $sender placeholders")
-		subject   = flag.String("subject", "Reminder: you were going to register to vote", "subject line; supports $name and $sender placeholders")
-		fromAddr  = flag.String("from", "", "your Gmail address (required): SMTP username and envelope/From address")
-		fromName  = flag.String("from-name", "", "display name for the From header and $sender in the body")
-		passFile  = flag.String("password-file", "", "read the app password from this file instead of prompting/stdin")
-		seedFile  = flag.String("secrethashseed", "",
+		subject   = flag.String(
+			"subject",
+			"Reminder: you were going to register to vote",
+			"subject line; supports $name and $sender placeholders",
+		)
+		fromAddr = flag.String("from", "", "your Gmail address (required): SMTP username and envelope/From address")
+		fromName = flag.String("from-name", "", "display name for the From header and $sender in the body")
+		passFile = flag.String("password-file", "", "read the app password from this file instead of prompting/stdin")
+		seedFile = flag.String("secrethashseed", "",
 			"file holding the secret seed for voting-link HMAC; required when the "+
 				"template uses $votingsecret/$votinghash. Generated (0600) if missing or empty.")
 		perMinute = flag.Float64("per-minute", 20, "max sends per minute")
@@ -116,7 +128,9 @@ func main() {
 	var seed []byte
 	if usesVotingTag(*subject) || usesVotingTag(bodyText) {
 		if *seedFile == "" {
-			log.Fatalf("the template uses a voting tag ($votingsecret/$votinghash) but -secrethashseed was not given; pass -secrethashseed FILE")
+			log.Fatalf(
+				"the template uses a voting tag ($votingsecret/$votinghash) but -secrethashseed was not given; pass -secrethashseed FILE",
+			)
 		}
 		seed, err = loadOrCreateSeed(*seedFile)
 		if err != nil {
@@ -137,7 +151,7 @@ func main() {
 	interval := time.Duration(float64(time.Minute) / *perMinute)
 	var last time.Time
 
-	var sentCount, skipCount, failCount, consecFails int
+	var sentCount, skipCount, failCount int
 	for _, r := range recipients {
 		key := strings.ToLower(r.Email)
 		if sent[key] {
@@ -180,11 +194,21 @@ func main() {
 		switch {
 		case err == nil:
 			if aerr := appendSent(*sentPath, *fromAddr, r.Email); aerr != nil {
-				log.Fatalf("sent to %s but FAILED to record it in %s: %v -- stopping to avoid duplicate sends. Add %s to the log manually before re-running.", r.Email, *sentPath, aerr, r.Email)
+				log.Fatalf(
+					"sent to %s but FAILED to record it in %s: %v -- stopping to avoid duplicate sends. Add %s to the log manually before re-running.",
+					r.Email,
+					*sentPath,
+					aerr,
+					r.Email,
+				)
 			}
 			sentCount++
-			consecFails = 0
 			log.Printf("sent to %s (%d this run)", r.Email, sentCount)
+
+		case errors.Is(err, errRecipientRejected):
+			// One bad address: skip it and keep going.
+			failCount++
+			log.Printf("skipping %s: %v", r.Email, err)
 
 		case errors.Is(err, errStop):
 			log.Printf("stopping at %s: %v", r.Email, err)
@@ -195,16 +219,12 @@ func main() {
 			return
 
 		default:
+			// A non-recipient permanent failure (e.g. sender rejected, message
+			// refused) hits every message, so stop rather than churn the list.
 			failCount++
-			consecFails++
-			log.Printf("failed to send to %s: %v", r.Email, err)
-		}
-
-		// Stop the run when sends fail back-to-back (network down, a wider
-		// block) instead of churning through the rest of the list.
-		if consecFails >= 5 {
-			log.Printf("5 consecutive failures; stopping in case something is wrong (network or a wider block).")
-			break
+			log.Printf("stopping: unexpected send failure for %s: %v", r.Email, err)
+			printSummary(sentCount, skipCount, failCount)
+			return
 		}
 	}
 
@@ -301,7 +321,9 @@ func (m *mailer) transact(from, to string, raw []byte) error {
 		return err
 	}
 	if err := m.client.Rcpt(to); err != nil {
-		return err
+		// Wrap with both the sentinel and the underlying error so the loop can
+		// skip just this recipient while classify() still sees the SMTP code.
+		return fmt.Errorf("%w: %w", errRecipientRejected, err)
 	}
 	w, err := m.client.Data()
 	if err != nil {
@@ -441,7 +463,11 @@ func warnIfInGitRepo(path string) {
 	}
 	for dir := filepath.Dir(abs); ; {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			log.Printf("warning: %s is inside a git repository (%s); move the app password outside your repo so it can't be committed", path, dir)
+			log.Printf(
+				"warning: %s is inside a git repository (%s); move the app password outside your repo so it can't be committed",
+				path,
+				dir,
+			)
 			return
 		}
 		parent := filepath.Dir(dir)
@@ -653,14 +679,17 @@ func usesVotingTag(s string) bool {
 
 // votingToken derives the per-voter authentication token:
 //
-//	base64url( HMAC-SHA256(seed, LP("vote") ‖ LP(lowerEmail)) )   LP(x)=len(x)":"x
+//	base64url( HMAC-SHA256(seed, LP("vote") ‖ LP(identity)) )   LP(x)=len(x)":"x
 //
-// full 32 bytes, URL-safe base64 without padding. The server recomputes this
-// with the same seed and constant-time compares (hmac.Equal) to authenticate.
-func votingToken(seed []byte, lowerEmail string) string {
+// full 32 bytes, URL-safe base64 without padding. It signs identity verbatim —
+// any normalization (e.g. lowercasing) is the caller's job, so the string put in
+// the link's voter= param and the string signed here are guaranteed identical.
+// The server recomputes this over the voter= param as received (URL-decoded) and
+// constant-time compares (hmac.Equal).
+func votingToken(seed []byte, identity string) string {
 	mac := hmac.New(sha256.New, seed)
 	writeLP(mac, "vote")
-	writeLP(mac, lowerEmail)
+	writeLP(mac, identity)
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 

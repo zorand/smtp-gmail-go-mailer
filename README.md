@@ -122,25 +122,28 @@ token = base64url_nopad( HMAC-SHA256(seed, LP("vote") ‖ LP(lower(email))) )
   generated, base64-encoded, and written `0600`. **Regenerating invalidates every
   previously issued link**, so back the file up and reuse it — and the *same* seed
   must be present on the vote server.
-- **email** — lowercased; the `voter=` param is that same lowercased address,
-  URL-encoded.
+- **identity** — the token signs its input verbatim; it does no normalization
+  itself. The mailer normalizes the email **once** (lowercasing it) and signs
+  that, and the `voter=` param carries the *same* string, URL-encoded. So the
+  identity that is signed and the identity in the link are guaranteed identical.
 - Full 32-byte (43-char) token. The `"vote"` prefix domain-separates this seed
   from any other use; the length prefixes make the signed bytes unambiguous.
 
 Because forwarding an email forwards the link, possession of the link is the
 credential: if a voter keeps their email private, only they can vote as
-themselves. The server authenticates by recomputing the token over the email it
-already has and constant-time comparing:
+themselves. The server authenticates by signing the `voter=` param **exactly as
+received** (URL-decoded, no re-normalization — the mailer already produced the
+canonical identity) and constant-time comparing:
 
 ```go
 func lp(w io.Writer, s string) { fmt.Fprintf(w, "%d:", len(s)); io.WriteString(w, s) }
 
-// seed = bytes of the -secrethashseed file, whitespace-trimmed.
-func validToken(seed []byte, voterEmail, gotToken string) bool {
-	email := strings.ToLower(voterEmail)
+// seed  = bytes of the -secrethashseed file, whitespace-trimmed.
+// voter = the voter= query param, URL-decoded and used verbatim.
+func validToken(seed []byte, voter, gotToken string) bool {
 	mac := hmac.New(sha256.New, seed)
 	lp(mac, "vote")
-	lp(mac, email)
+	lp(mac, voter)
 	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	return hmac.Equal([]byte(want), []byte(gotToken)) // constant-time
 }
@@ -185,6 +188,10 @@ and doesn't write the resume log:
 ./votereminder-smtp -from you@gmail.com -from-name "Foo Bar" \
   -recipients recipients.txt -emailbody emailbody.txt -dry-run
 ```
+
+Note: a dry run renders the full message, so if your body uses `$votingsecret` /
+`$votinghash` the output contains **real, valid voting tokens**. Don't paste dry-run
+output anywhere public or into a shared log.
 
 ## Supplying the app password
 

@@ -6,6 +6,8 @@ seed.txt
 *.seed
 *seed*.txt
 
+.DS_Store
+
 # Personal data
 recipients.txt
 
